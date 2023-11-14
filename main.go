@@ -16,6 +16,9 @@ func createDBConnection() (*sql.DB, error) {
 	// Replace with your PostgreSQL connection string
 	dbURL := "postgres://postgres:alpha123@localhost:5432/my_pgdb?sslmode=disable"
 	db, err := sql.Open("postgres", dbURL)
+	db.SetMaxOpenConns(500) // Set the maximum number of open connections
+	db.SetMaxIdleConns(100) // Set the maximum number of idle connections
+
 	if err != nil {
 		return nil, err
 	}
@@ -34,8 +37,6 @@ func createTable(db *sql.DB) error {
 }
 
 func insertRecord(db *sql.DB, name string) (int, error) {
-	mu.Lock()         // Lock before starting the critical section
-	defer mu.Unlock() // Ensure the mutex is unlocked even if an error occurs
 
 	var id int
 	err := db.QueryRow("INSERT INTO employees(name) VALUES($1) RETURNING id", name).Scan(&id)
@@ -46,8 +47,6 @@ func insertRecord(db *sql.DB, name string) (int, error) {
 }
 
 func getAllRecords(db *sql.DB) ([]Record, error) {
-	mu.Lock()
-	defer mu.Unlock()
 
 	rows, err := db.Query("SELECT id, name FROM employees")
 	if err != nil {
@@ -67,8 +66,6 @@ func getAllRecords(db *sql.DB) ([]Record, error) {
 }
 
 func updateRecord(db *sql.DB, id int, newName string) error {
-	mu.Lock()
-	defer mu.Unlock()
 
 	// Check if the record with the specified ID exists
 	var count int
@@ -88,8 +85,6 @@ func updateRecord(db *sql.DB, id int, newName string) error {
 }
 
 func deleteRecord(db *sql.DB, id int) error {
-	mu.Lock()
-	defer mu.Unlock()
 
 	// Check if the record with the specified ID exists
 	var count int
@@ -108,19 +103,22 @@ func deleteRecord(db *sql.DB, id int) error {
 	return err
 }
 
-// Insert records concurrently
+//Insert records concurrently
+
 func insertAndReadRecordsConcurrently(db *sql.DB) error {
+	const concurrencyLimit = 47 // Adjust the concurrency limit as needed
+	var insertCh = make(chan int, concurrencyLimit)
 	startTime := time.Now()
 
 	var wg sync.WaitGroup
-	// var mu sync.Mutex // Mutex for synchronization
 
 	// Insert records concurrently
 	for i := 0; i < 100000; i++ {
 		wg.Add(1)
+		insertCh <- i
 		go func(index int) {
 			defer wg.Done()
-
+			defer func() { <-insertCh }()
 			name := fmt.Sprintf("User%d", index)
 			_, err := insertRecord(db, name)
 			if err != nil {
@@ -238,7 +236,6 @@ func main() {
 			}
 
 		case 5:
-			// Call the insertAndReadRecordsConcurrently function
 			err := insertAndReadRecordsConcurrently(db)
 			if err != nil {
 				log.Fatal(err)
